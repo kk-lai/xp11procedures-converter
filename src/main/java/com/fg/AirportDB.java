@@ -27,7 +27,7 @@ public class AirportDB extends Db {
             Statement stmt = conn.createStatement();
             stmt.execute("delete from airports");
             stmt.execute("delete from runways");
-            PreparedStatement prep1 = conn.prepareStatement("insert into airports values (?,?);");
+            PreparedStatement prep1 = conn.prepareStatement("insert into airports values (?,?,?,?);");
             PreparedStatement prep2 = conn.prepareStatement("insert into runways values (?,?,?,?)");
 
             BufferedReader br = new BufferedReader(new FileReader(new File(file)));
@@ -35,7 +35,7 @@ public class AirportDB extends Db {
             conn.setAutoCommit(false);
 
             String aptCode = null;
-            String aptName = null;
+            String aptName = null;            
             boolean isSkip=false;
             
             while ((line=br.readLine())!=null) {
@@ -70,8 +70,11 @@ public class AirportDB extends Db {
                     case 100:                                      
                         if (!isSkip) {
                             if (!importedAirports.contains(aptCode)) {
+
                                 prep1.setString(1,aptCode);
                                 prep1.setString(2,aptName);
+                                prep1.setFloat(3,0.F);
+                                prep1.setFloat(4,0.F);
                                 prep1.addBatch();
                                 importedAirports.add(aptCode);
                             }   
@@ -92,7 +95,10 @@ public class AirportDB extends Db {
             }
             br.close();            
             prep1.executeBatch();
-            prep2.executeBatch();
+            prep2.executeBatch();                    
+            conn.createStatement().executeUpdate("update airports " +
+                "set latitude=(select avg(latitude) from runways where airportCode=airports.airportCode), " +
+                "longitude=(select avg(longitude) from runways where airportCode=airports.airportCode);");
             conn.commit();
         } catch (Exception e) {
             logger.error("Error in line:"+lineNo);
@@ -128,5 +134,46 @@ public class AirportDB extends Db {
             e.printStackTrace();
         }
         return null;
+    }
+
+    public float[] findAirport(String airportCode)
+    {       
+        float[] result = null;
+        try {
+            this.connect();
+            PreparedStatement stmt = conn.prepareStatement("select latitude,longitude from airports where airportCode=?");
+            stmt.setString(1, airportCode);
+            ResultSet rs = stmt.executeQuery();            
+            if (rs.next()) {
+                result = new float[2];
+                result[0]=rs.getFloat(1);
+                result[1]=rs.getFloat(2);
+            }
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            e.printStackTrace();
+        } 
+        return result;
+    }
+
+    public float[] findRunwayLocation(String airportCode, String rwy)
+    {       
+        float[] result = null;
+        try {
+            this.connect();
+            PreparedStatement stmt = conn.prepareStatement("select latitude,longitude from runways where airportCode=? and runway=?");
+            stmt.setString(1, airportCode);
+            stmt.setString(2, rwy);
+            ResultSet rs = stmt.executeQuery();            
+            if (rs.next()) {
+                result = new float[2];
+                result[0]=rs.getFloat(1);
+                result[1]=rs.getFloat(2);
+            }
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+            e.printStackTrace();
+        } 
+        return result;
     }
 }

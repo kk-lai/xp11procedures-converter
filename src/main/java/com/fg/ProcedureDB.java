@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 
 import com.fasterxml.jackson.core.JsonGenerationException;
 import com.fasterxml.jackson.databind.JsonMappingException;
@@ -56,7 +57,8 @@ public class ProcedureDB {
             this.build="xpextract";
             AirportDB airportDb = new AirportDB();
             FixDB fixDb = new FixDB();
-            NavDB navDb = new NavDB();            
+            NavDB navDb = new NavDB();
+            AirportDB airportDB = new AirportDB();            
             this.airport=new Airport(airportCode);
             BufferedReader br = new BufferedReader(new FileReader(ifile));
             String line;
@@ -82,6 +84,8 @@ public class ProcedureDB {
 
                 String wayptRegionCode=cols[5];
                 String secCode = cols[6];
+                String subCode = cols[7];
+                String descCode = cols[8];
                 boolean isAddWaypoint = true;
                 if (waypoint.isEmpty()) {
                     continue;
@@ -132,12 +136,34 @@ public class ProcedureDB {
                             lastWaypoint=null;
                         }
                     }
-                /*} else if (line.startsWith("APPCH:")) {
-                    if (procedure==null || !procedure.getName().equals(pname) || !procedure.getClass().getName().equals("Approach")) {
-                        System.out.println("Approach:"+pname);
-                        procedure=new Approach(pname);
+                } else if (line.startsWith("APPCH:")) {                    
+                    if (!ident.equals(lastIndent) || !transIdent.equals(lastTransIdent)) {
+                        String aprefix = "";
+                        if (ident.startsWith("R")) {
+                            aprefix = "RNAV";                            
+                        } else if (ident.startsWith("D")) {
+                            aprefix = "DME";
+                        } else if (ident.startsWith("I")) {
+                            aprefix = "ILS";
+                        } else if (ident.startsWith("L")) {
+                            aprefix = "LOC";
+                        } else if (ident.startsWith("X")) {
+                            aprefix = "LDA";
+                        }
+                        String rwy=ident.substring(1);
+                        if (rwy.endsWith("X") || rwy.endsWith("Y") || rwy.endsWith("Z")) {
+                            aprefix=aprefix+"-"+rwy.substring(rwy.length()-1);
+                            rwy=rwy.substring(0,rwy.length()-1);
+                        }
+                        String suffix = "";
+                        if (!transIdent.isEmpty()) {
+                            suffix="-"+transIdent;
+                        }
+                        procedure=new Approach(aprefix+rwy+suffix, ident, transIdent, rwy);            
+                        airport.getApproaches().add((Approach)procedure);
+                        wpid=1;
                         lastWaypoint=null;
-                    } */
+                    }
                 } else {
                     System.out.println("Skipping line:"+lineNo);
                     isAddWaypoint=false;
@@ -150,16 +176,30 @@ public class ProcedureDB {
                     lastWaypoint=waypoint;
                     lastTransIdent=transIdent;
                     lastIndent=ident;
-                    if (secCode.equals("D")) {
+                    boolean isRunway=false;
+                    if (secCode.equals("D") || subCode.equals("N")) {
                         ll = navDb.findNav(waypoint,wayptRegionCode);
                     } else {
-                        String icaoCode=airportCode;
-                        if (secCode.equals("E")) {
-                            icaoCode="ENRT";
+                        if (descCode.length()>1 && descCode.startsWith("A")) {
+                            // airport
+                            ll = airportDb.findAirport(waypoint);    
+                        } else {
+                            String icaoCode=airportCode;
+                            if (secCode.equals("E")) {
+                                icaoCode="ENRT";
+                            }
+                            ll = fixDb.findFix(waypoint, icaoCode, wayptRegionCode);
+                            if (ll==null && line.startsWith("APPCH") && waypoint.startsWith("RW")) {
+                                Approach ap=(Approach)procedure;
+                                ll= airportDB.findRunwayLocation(airportCode, ap.getRunway());
+                                isRunway=true;
+                            }
                         }
-                        ll = fixDb.findFix(waypoint, icaoCode, wayptRegionCode);
-                    }                    
+                    }         
                     Waypoint wpt = new Waypoint(wpid, waypoint, ll[0], ll[1]);
+                    if (isRunway) {
+                        wpt.setType("Runway");
+                    }
                     if (!cols[27].isEmpty()) {
                         int speed = Integer.parseInt(cols[27]);
                         wpt.setSpeed(speed);
@@ -181,6 +221,14 @@ public class ProcedureDB {
                     }                    
                     wpid++;
                     procedure.getWaypoints().add(wpt);
+                    if (!isRunway && line.startsWith("APPCH:") && descCode.length()>=4 && descCode.substring(3,4).equals("M")) {
+                        Approach ap=(Approach)procedure;
+                        ll=airportDB.findRunwayLocation(airportCode, ap.getRunway());
+                        wpt = new Waypoint(wpid, "RW" + ap.getRunway(), ll[0], ll[1]);
+                        wpt.setType("Runway");
+                        procedure.getWaypoints().add(wpt);
+                        wpid++;                        
+                    }
                 }
             }
             for(SidTransition sidTransition : sidTransitions) {
@@ -257,6 +305,25 @@ public class ProcedureDB {
                     }
                 }
             } while (j<airport.getSids().size());
+            HashMap<String,Approach> aps = new HashMap<String,Approach>();
+            for(Approach ap: airport.getApproaches()) {
+                if (ap.getTransIdent().isEmpty()) {
+                    aps.put(ap.getIdent(),ap);
+                }
+            }
+            airport.getApproaches().removeAll(aps.values());
+            for(Approach ap: airport.getApproaches()) {
+                if (aps.containsKey(ap.getIdent())) {
+                    Approach ap0=aps.get(ap.getIdent());
+                    for(Waypoint wp: ap0.getWaypoints()) {
+                        ap.getWaypoints().add(wp);
+                    }
+                    int id=1;
+                    for(Waypoint wp: ap.getWaypoints()) {
+                        wp.setId(id++);
+                    }
+                }
+            }
             br.close();
             this.writeXML(ofile);
         } catch (Exception e) {
